@@ -11,7 +11,7 @@ import sys
 import os
 
 EXAMPLES_BASE_DIR='../../'
-IMAGES_DIR = './'
+IMAGES_DIR = './images'
 
 VALIDATED_IMAGES_DIR = IMAGES_DIR + 'validated_images/'
 validated_image_filename = VALIDATED_IMAGES_DIR + 'valid.jpg'

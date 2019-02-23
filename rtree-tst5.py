@@ -10,7 +10,9 @@ import cv2
 import sys
 import os
 import math
+import time
 
+IMAGES_DIR = '../../Face-DB/colorferet/images/jpg_train/'
 IMAGES_DIR = 'images/'
 VALIDATED_IMAGES_DIR = 'validated_images/'
 validated_image_filename = VALIDATED_IMAGES_DIR + 'valid.jpg'
@@ -36,13 +38,15 @@ def chunks(l, n):
         yield l[i:offs]
 
 def rms(valList):
+    """Calculates the RMS value of all values in list valList."""
     sum = 0
     for v in valList:
         sum = sum + v*v
     return math.sqrt(sum)/len(valList)
 
-def rmsList(valList, size):
-    chList = chunks(valList, size)
+def rmsList(l, s):
+    """Chops the list l into s partitions, calculates the RMS of sublist and returns a list of size s with RMS values."""
+    chList = chunks(l, s)
     return [rms(x) for x in chList]
 
 
@@ -57,8 +61,9 @@ def run_inference(image_to_classify, facenet_graph, file_name):
     # get a resized version of the image that is the dimensions
     # SSD Mobile net expects
     print("run_inference")
-    cv2.imshow(file_name, image_to_classify)
-    cv2.waitKey(0)
+    #cv2.imshow("Image", image_to_classify)
+    #time.sleep(1)
+    #cv2.waitKey(0)
     resized_image = preprocess_image(image_to_classify)
     #cv2.imshow("preprocessed", resized_image)
 
@@ -75,7 +80,6 @@ def run_inference(image_to_classify, facenet_graph, file_name):
     #print("Total results: " + str(len(output)))
     #print(output)
     #print(userobj)
-
     return output
 
 
@@ -104,6 +108,7 @@ def preprocess_image(src):
     # return the preprocessed image
     return preprocessed_image
 
+
 # determine if two images are of matching faces based on the
 # the network output for both images.
 def face_match(face1_output, face2_output):
@@ -114,16 +119,18 @@ def face_match(face1_output, face2_output):
     for output_index in range(0, len(face1_output)):
         this_diff = numpy.square(face1_output[output_index] - face2_output[output_index])
         total_diff += this_diff
-    print('Total Difference is: ' + str(total_diff))
+    #print('Total Difference is: ' + str(total_diff))
 
     if (total_diff < FACE_MATCH_THRESHOLD):
         # the total difference between the two is under the threshold so
         # the faces match.
+        print('Total Difference is: ' + str(total_diff))
         return True
 
     # differences between faces was over the threshold above so
     # they didn't match.
     return False
+
 
 def toRecTuple(valueList):
     # R-tree
@@ -135,21 +142,17 @@ def toRecTuple(valueList):
     targTupl =  tuple(targList)
     return targTupl
 
-# Test all files in a list for a match against a valided face and display each one.
-# valid_output is inference result for the valid image
-# validated image filename is the name of the valid image file
-# graph is the ncsdk Graph object initialized with the facenet graph file
-#   which we will run the inference on.
-# input_image_filename_list is a list of image files to compare against the
-#   valid face output.
-def run_images(valid_output_full, validated_image_filename, graph, input_image_filename_list):
+def setupIndex():
     idxprop = index.Property()
     idxprop.dimension = DIMENSIONS
     idxprop.dat_extension = 'data'
     idxprop.idx_extension = 'index'
     idx = index.Index('3d_index',properties=idxprop)
-    idx_nr = 0
+    return idx
 
+def build_index(idx, graph, input_image_filename_list):
+    idx_nr = 0
+    testList = []
     cv2.namedWindow(CV_WINDOW_NAME)
     for input_image_file in input_image_filename_list :
         print("Processing [",idx_nr,"] file ", input_image_file)
@@ -159,29 +162,36 @@ def run_images(valid_output_full, validated_image_filename, graph, input_image_f
         # run a single inference on the image and overwrite the
         # boxes and labels
         test_output_full = run_inference(infer_image, graph, input_image_file + " -- " + str(idx_nr))
+        testList.append(test_output_full)
         test_output = rmsList(test_output_full, 13)
-        print("test_output=",test_output)
+        #print("test_output=",test_output)
         testTupl = toRecTuple(test_output)
-        print("testTuble=",testTupl)
-        idx.insert(idx_nr, testTupl, obj=idx_nr)
-       
-
-        valid_output = rmsList(valid_output_full, 13)
-        print("valid_output=",valid_output)
-        validTupl=toRecTuple(valid_output)
-        print("validTuble=",validTupl)
-        a=list(idx.nearest(validTupl))
-        print("R-tree near: ", a)
+        #print("testTuble=",testTupl)
+        idx.insert(idx_nr, testTupl, obj=input_image_file)
         idx_nr = idx_nr + 1
+    return testList
+
+
+def run_validate_images(validated_image_list, graph, index, testOutputList):
+
+    for validated_image_filename in validated_image_list :
+        validated_image = cv2.imread(VALIDATED_IMAGES_DIR + validated_image_filename)
+        valid_output_full = run_inference(validated_image, graph, validated_image_filename)
+        valid_output = rmsList(valid_output_full, 13)
+        #print("valid_output=",valid_output)
+        validTupl=toRecTuple(valid_output)
+        #print("validTuble=",validTupl)
+        a=list(index.nearest(validTupl))
+        print("R-tree near: ", a)
 
         # Test the inference results of this image with the results
         # from the known valid face.
-        if (face_match(valid_output_full, test_output_full)):
-            print('PASS!  File ' + input_image_file + ' matches ' + validated_image_filename)
-        else:
-            print('FAIL!  File ' + input_image_file + ' does not match ' + validated_image_filename)
+        idx_nr = 0
+        for test_output_full in testOutputList :
+            if (face_match(valid_output_full, test_output_full)):
+                print('PASS!  idx ' + str(idx_nr) + ' matches ' + validated_image_filename)
+            idx_nr = idx_nr + 1
 
-        #cv2.imshow(CV_WINDOW_NAME, infer_image)
 
 # This function is called from the entry point to do
 # all the work of the program
@@ -212,9 +222,6 @@ def main():
     graph = device.AllocateGraph(graph_in_memory)
     print("Graph loaded into memory")
 
-    validated_image = cv2.imread(validated_image_filename)
-    valid_output = run_inference(validated_image, graph, validated_image_filename)
-
     print("Getting jpg files")
     # get list of all the .jpg files in the image directory
     input_image_filename_list = os.listdir(IMAGES_DIR)
@@ -223,7 +230,10 @@ def main():
         # no images to show
         print('No .jpg files found')
         return 1
-    run_images(valid_output, validated_image_filename, graph, input_image_filename_list)
+    index = setupIndex()
+    testOutputList = build_index(index, graph, input_image_filename_list)
+    validate_image_filename_list = os.listdir(VALIDATED_IMAGES_DIR)
+    run_validate_images(validate_image_filename_list, graph, index, testOutputList)
 
     print("Cleanup")
     # Clean up the graph and the device

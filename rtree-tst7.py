@@ -18,7 +18,7 @@ VALIDATED_IMAGES_DIR = '/home/pi/Projects/Movidius/Face-DB/colorferet/images/jpg
 GRAPH_FILENAME = "facenet_celeb_ncs.graph"
 DIMENSIONS=10
 BIAS=100
-DELTA=0.1
+DELTA=0.20
 
 # name of the opencv window
 CV_WINDOW_NAME = "FaceNet"
@@ -59,7 +59,7 @@ def run_inference(image_to_classify, facenet_graph, file_name):
 
     # get a resized version of the image that is the dimensions
     # SSD Mobile net expects
-    print("run_inference")
+    #print("run_inference")
     #cv2.imshow("Image", image_to_classify)
     #time.sleep(1)
     #cv2.waitKey(0)
@@ -124,11 +124,11 @@ def face_match(face1_output, face2_output):
         # the total difference between the two is under the threshold so
         # the faces match.
         print('Total Difference is: ' + str(total_diff))
-        return True
+        return (True, total_diff)
 
     # differences between faces was over the threshold above so
     # they didn't match.
-    return False
+    return (False, 0)
 
 
 def toRecTuple(valueList):
@@ -171,7 +171,7 @@ def build_index(idx, graph, input_image_filename_list):
     return testList
 
 
-def run_validate_images(validated_image_list, graph, index, testOutputList):
+def run_validate_images(validated_image_list, graph, index, testOutputList, testOutputFileList):
 
     for validated_image_filename in validated_image_list :
         validated_image = cv2.imread(VALIDATED_IMAGES_DIR + validated_image_filename)
@@ -182,14 +182,16 @@ def run_validate_images(validated_image_list, graph, index, testOutputList):
         #print("validTuble=",validTupl)
         hits = list(index.nearest(validTupl, objects=True))
         hitsId = [str(item.id) + " -- " + item.object for item in hits]
-        print("R-tree near: ", hitsId)
+        for h in hitsId :
+            print("R-tree for: " + validated_image_filename + ' matches ' + h)
 
         # Test the inference results of this image with the results
         # from the known valid face.
         idx_nr = 0
         for test_output_full in testOutputList :
-            if (face_match(valid_output_full, test_output_full)):
-                print('PASS!  idx ' + str(idx_nr) + ' matches ' + validated_image_filename)
+            (fm, fmdiff) = face_match(valid_output_full, test_output_full)
+            if (fm):
+                print('PASS!  test ' + validated_image_filename + ' matches ' + testOutputFileList[idx_nr] + ' id=' + str(idx_nr) + ' diff=' + str(fmdiff))
             idx_nr = idx_nr + 1
 
 
@@ -233,7 +235,7 @@ def main():
     index = setupIndex()
     testOutputList = build_index(index, graph, input_image_filename_list)
     validate_image_filename_list = os.listdir(VALIDATED_IMAGES_DIR)
-    run_validate_images(validate_image_filename_list, graph, index, testOutputList)
+    run_validate_images(validate_image_filename_list, graph, index, testOutputList, input_image_filename_list)
 
     print("Cleanup")
     # Clean up the graph and the device

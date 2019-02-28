@@ -17,8 +17,12 @@ IMAGES_DIR = '/home/pi/Projects/Movidius/Face-DB/colorferet/images/jpg_train/'
 VALIDATED_IMAGES_DIR = '/home/pi/Projects/Movidius/Face-DB/colorferet/images/jpg_test/'
 GRAPH_FILENAME = "facenet_celeb_ncs.graph"
 DIMENSIONS=10
-BIAS=100
-DELTA=0.1
+BIAS_RMS=100
+DELTA_ABS_RMS=0.15
+DELTA_PCT_RMS=0.0
+BIAS_AWG=100
+DELTA_ABS_AWG=0.0
+DELTA_PCT_AWG=0.05
 
 # name of the opencv window
 CV_WINDOW_NAME = "FaceNet"
@@ -27,7 +31,7 @@ CV_WINDOW_NAME = "FaceNet"
 # different faces return higher numbers
 # this is NOT between 0.0 and 1.0
 #FACE_MATCH_THRESHOLD = 1.2
-FACE_MATCH_THRESHOLD = 0.5
+FACE_MATCH_THRESHOLD = 0.3
 
 
 def chunks(l, n):
@@ -43,10 +47,22 @@ def rms(valList):
         sum = sum + v*v
     return math.sqrt(sum)/len(valList)
 
+def awg(valList):
+    """Calculates the mean value of all values in list valList."""
+    sum = 0
+    for v in valList:
+        sum = sum + v
+    return sum/len(valList)
+
 def rmsList(l, s):
     """Chops the list l into s partitions, calculates the RMS of sublist and returns a list of size s with RMS values."""
     chList = chunks(l, s)
     return [rms(x) for x in chList]
+
+def awgList(l, s):
+    """Chops the list l into s partitions, calculates the mean of sublist and returns a list of size s with mean values."""
+    chList = chunks(l, s)
+    return [awg(x) for x in chList]
 
 
 # Run an inference on the passed image
@@ -59,7 +75,7 @@ def run_inference(image_to_classify, facenet_graph, file_name):
 
     # get a resized version of the image that is the dimensions
     # SSD Mobile net expects
-    print("run_inference")
+    #print("run_inference")
     #cv2.imshow("Image", image_to_classify)
     #time.sleep(1)
     #cv2.waitKey(0)
@@ -123,21 +139,29 @@ def face_match(face1_output, face2_output):
     if (total_diff < FACE_MATCH_THRESHOLD):
         # the total difference between the two is under the threshold so
         # the faces match.
-        print('Total Difference is: ' + str(total_diff))
-        return True
+        #print('Total Difference is: ' + str(total_diff))
+        return (True, total_diff)
 
     # differences between faces was over the threshold above so
     # they didn't match.
-    return False
+    return (False, 0)
 
 
-def toRecTuple(valueList):
-    # R-tree
+def toRMSTuple(valueList):
     targList = []
     for x in valueList:
-        targList.append(x*BIAS - DELTA) # xmin
+        targList.append(x*BIAS_RMS*(1.0-DELTA_PCT_RMS) - DELTA_ABS_RMS) # xmin
     for x in valueList:
-        targList.append(x*BIAS + DELTA) # xmax
+        targList.append(x*BIAS_RMS*(1.0+DELTA_PCT_RMS) + DELTA_ABS_RMS) # xmax
+    targTupl =  tuple(targList)
+    return targTupl
+
+def toAWGTuple(valueList):
+    targList = []
+    for x in valueList:
+        targList.append(x*BIAS_AWG - abs(x*BIAS_AWG)*(DELTA_PCT_AWG) - DELTA_ABS_AWG) # xmin
+    for x in valueList:
+        targList.append(x*BIAS_AWG + abs(x*BIAS_AWG)*(+DELTA_PCT_AWG) + DELTA_ABS_AWG) # xmax
     targTupl =  tuple(targList)
     return targTupl
 
@@ -162,34 +186,49 @@ def build_index(idx, graph, input_image_filename_list):
         # boxes and labels
         test_output_full = run_inference(infer_image, graph, input_image_file + " -- " + str(idx_nr))
         testList.append(test_output_full)
+
         test_output = rmsList(test_output_full, 13)
-        #print("test_output=",test_output)
-        testTupl = toRecTuple(test_output)
-        #print("testTuble=",testTupl)
+        print("RMS test_output=",test_output)
+        testTupl = toRMSTuple(test_output)
         idx.insert(idx_nr, testTupl, obj=input_image_file)
+
+        test_output = awgList(test_output_full, 13)
+        print("AWG test_output=",test_output)
+        testTupl = toAWGTuple(test_output)
+        print("AWG testTuple=",test_output)
+        idx.insert(10000+idx_nr, testTupl, obj=input_image_file)
+
         idx_nr = idx_nr + 1
     return testList
 
+def search_index(index, validTupl, validated_image_filename):
+        nearHits = list(index.nearest(validTupl, objects=True))
+        nearHitsId = [str(item.id) + " -- " + item.object for item in nearHits]
+        for h in nearHitsId :
+            print("R-tree near for: " + validated_image_filename + ' matches ' + h)
 
-def run_validate_images(validated_image_list, graph, index, testOutputList):
+        intrHits = list(index.intersection(validTupl, objects=True))
+        intrHitsId = [str(item.id) + " -- " + item.object for item in intrHits]
+        for h in intrHitsId :
+            print("R-tree intersect for: " + validated_image_filename + ' matches ' + h)
+
+def run_validate_images(validated_image_list, graph, index, testOutputList, testOutputFileList):
 
     for validated_image_filename in validated_image_list :
         validated_image = cv2.imread(VALIDATED_IMAGES_DIR + validated_image_filename)
         valid_output_full = run_inference(validated_image, graph, validated_image_filename)
         valid_output = rmsList(valid_output_full, 13)
-        #print("valid_output=",valid_output)
-        validTupl=toRecTuple(valid_output)
-        #print("validTuble=",validTupl)
-        hits = list(index.nearest(validTupl, objects=True))
-        hitsId = [str(item.id) + " -- " + item.object for item in hits]
-        print("R-tree near: ", hitsId)
+        
+        search_index(index, toRMSTuple(valid_output), validated_image_filename)
+        search_index(index, toAWGTuple(valid_output), validated_image_filename)
 
         # Test the inference results of this image with the results
         # from the known valid face.
         idx_nr = 0
         for test_output_full in testOutputList :
-            if (face_match(valid_output_full, test_output_full)):
-                print('PASS!  idx ' + str(idx_nr) + ' matches ' + validated_image_filename)
+            (fm, fmdiff) = face_match(valid_output_full, test_output_full)
+            if (fm):
+                print('PASS!  test ' + validated_image_filename + ' matches ' + testOutputFileList[idx_nr] + ' id=' + str(idx_nr) + ' diff=' + str(fmdiff))
             idx_nr = idx_nr + 1
 
 
@@ -233,7 +272,7 @@ def main():
     index = setupIndex()
     testOutputList = build_index(index, graph, input_image_filename_list)
     validate_image_filename_list = os.listdir(VALIDATED_IMAGES_DIR)
-    run_validate_images(validate_image_filename_list, graph, index, testOutputList)
+    run_validate_images(validate_image_filename_list, graph, index, testOutputList, input_image_filename_list)
 
     print("Cleanup")
     # Clean up the graph and the device

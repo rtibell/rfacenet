@@ -50,6 +50,14 @@ def rms(valList):
         sum = sum + v*v
     return math.sqrt(sum)/len(valList)
 
+def rmsDiff(val1, val2):
+    """Calculates the RMS value of all values in list valList."""
+    sum = 0
+    for i in range(0, len(val1)):
+        v = val1[i] - val2[i]
+        sum = sum + v*v
+    return math.sqrt(sum)/len(val1)
+
 def norm(valList, lmin, lmax):
     """Calculates the norm value between 0 and 1.0, of all values in list valList."""
     retList = []
@@ -76,15 +84,10 @@ def norList(l, s, lmin, lmax):
 # ssd_mobilenet_graph is the Graph object from the NCAPI which will
 #    be used to peform the inference.
 def run_inference(image_to_classify, facenet_graph, file_name):
-
     # get a resized version of the image that is the dimensions
     # SSD Mobile net expects
-    #print("run_inference")
-    #cv2.imshow("Image", image_to_classify)
-    #time.sleep(1)
     #cv2.waitKey(0)
     resized_image = preprocess_image(image_to_classify)
-    #cv2.imshow("preprocessed", resized_image)
 
     # ***************************************************************
     # Send the image to the NCS
@@ -95,10 +98,6 @@ def run_inference(image_to_classify, facenet_graph, file_name):
     # Get the result from the NCS
     # ***************************************************************
     output, userobj = facenet_graph.GetResult()
-
-    #print("Total results: " + str(len(output)))
-    #print(output)
-    #print(userobj)
     return output
 
 
@@ -151,32 +150,6 @@ def face_match(face1_output, face2_output):
     return (False, 0)
 
 
-def toRMSTuple(valueList):
-    targList = []
-    for x in valueList:
-        targList.append(x*BIAS_RMS*(1.0-DELTA_PCT_RMS) - DELTA_ABS_RMS) # xmin
-    for x in valueList:
-        targList.append(x*BIAS_RMS*(1.0+DELTA_PCT_RMS) + DELTA_ABS_RMS) # xmax
-    targTupl =  tuple(targList)
-    return targTupl
-
-def toNORTuple(valueList):
-    targList = []
-    for x in valueList:
-        targList.append(x*BIAS_NOR*(1.0-DELTA_PCT_NOR) - DELTA_ABS_NOR) # xmin
-    for x in valueList:
-        targList.append(x*BIAS_NOR*(1.0+DELTA_PCT_NOR) + DELTA_ABS_NOR) # xmax
-    targTupl =  tuple(targList)
-    return targTupl
-
-def setupIndex():
-    idxprop = index.Property()
-    idxprop.dimension = DIMENSIONS
-    idxprop.dat_extension = 'data'
-    idxprop.idx_extension = 'index'
-    idx = index.Index('3d_index',properties=idxprop)
-    return idx
-
 def build_index(graph, input_image_filename_list):
     idx_nr = 0
     testList = []
@@ -190,41 +163,23 @@ def build_index(graph, input_image_filename_list):
         test_output_full = run_inference(infer_image, graph, input_image_file + " -- " + str(idx_nr))
         testList.append(test_output_full)
         idx_nr = idx_nr + 1
-    points = nb.array(testList)
+    points = np.array(testList)
     tree = KDTree(points)
-
     #print(testList)
     return ( tree, testList )
 
-def search_index(index, validTupl, validated_image_filename):
-        nearHits = list(index.nearest(validTupl, objects=True))
-        nearHitsId = [str(item.id) + " -- " + item.object for item in nearHits]
-        for h in nearHitsId :
-            print("R-tree near for: " + validated_image_filename + ' matches ' + h)
+def search_index(tree, validTuple, validated_image_filename, testOutputList, fileNameList):
+    (valAtIdx, idx) = tree.query(validTuple)
+    #print(idx, valAtIdx)
+    elem = testOutputList[idx] 
+    print("KD-tree match val " + str(valAtIdx) + " rms " + str(rmsDiff(elem, validTuple)) + " images " + fileNameList[idx] + " -- " + validated_image_filename)
 
-        intrHits = list(index.intersection(validTupl, objects=True))
-        intrHitsId = [str(item.id) + " -- " + item.object for item in intrHits]
-        for h in intrHitsId :
-            print("R-tree intersect for: " + validated_image_filename + ' matches ' + h)
 
-def run_validate_images(validated_image_list, graph, index, testOutputList, testOutputFileList, lmin, lmax):
-
+def run_validate_images(validated_image_list, graph, tree, testOutputList, testOutputFileList):
     for validated_image_filename in validated_image_list :
         validated_image = cv2.imread(VALIDATED_IMAGES_DIR + validated_image_filename)
         valid_output_full = run_inference(validated_image, graph, validated_image_filename)
-        valid_output = rmsList(valid_output_full, 13)
-        search_index(index, toRMSTuple(valid_output), validated_image_filename)
-        valid_output = norList(valid_output_full, 13, lmin, lmax)
-        search_index(index, toNORTuple(valid_output), validated_image_filename)
-
-        # Test the inference results of this image with the results
-        # from the known valid face.
-        idx_nr = 0
-        for test_output_full in testOutputList :
-            (fm, fmdiff) = face_match(valid_output_full, test_output_full)
-            if (fm):
-                print('PASS!  test ' + validated_image_filename + ' matches ' + testOutputFileList[idx_nr] + ' id=' + str(idx_nr) + ' diff=' + str(fmdiff))
-            idx_nr = idx_nr + 1
+        search_index(tree, valid_output_full, validated_image_filename, testOutputList, testOutputFileList)
 
 
 # This function is called from the entry point to do
@@ -264,10 +219,9 @@ def main():
         # no images to show
         print('No .jpg files found')
         return 1
-    index = setupIndex()
-    (index, testOutputList) = build_index( graph, input_image_filename_list)
+    (tree, testOutputList) = build_index( graph, input_image_filename_list)
     validate_image_filename_list = os.listdir(VALIDATED_IMAGES_DIR)
-    run_validate_images(validate_image_filename_list, graph, index, testOutputList, input_image_filename_list)
+    run_validate_images(validate_image_filename_list, graph, tree, testOutputList, input_image_filename_list)
 
     print("Cleanup")
     # Clean up the graph and the device

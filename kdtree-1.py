@@ -27,6 +27,10 @@ DELTA_PCT_NOR=0.0090
 # name of the opencv window
 CV_WINDOW_NAME = "FaceNet"
 
+# Create the haar cascade
+cascPath = "haarcascade_frontalface_default.xml"
+faceCascade = cv2.CascadeClassifier(cascPath)
+
 # the same face will return 0.0
 # different faces return higher numbers
 # this is NOT between 0.0 and 1.0
@@ -86,8 +90,15 @@ def norList(l, s, lmin, lmax):
 def run_inference(image_to_classify, facenet_graph, file_name):
     # get a resized version of the image that is the dimensions
     # SSD Mobile net expects
-    #cv2.waitKey(0)
-    resized_image = preprocess_image(image_to_classify)
+    #if file_name.startswith("Donald") or file_name.startswith("Bara"):
+    #    #cv2.imshow("Image", image_to_classify)
+    #    #print("image",file_name)
+    #    #cv2.waitKey(0)
+    resized_image = preprocess_image(image_to_classify, file_name)
+    #if file_name.startswith("Donald") or file_name.startswith("Bara"):
+    #    cv2.imshow("Image rez", resized_image)
+    #    print("image rez",file_name)
+    #    #cv2.waitKey(0)
 
     # ***************************************************************
     # Send the image to the NCS
@@ -100,6 +111,26 @@ def run_inference(image_to_classify, facenet_graph, file_name):
     output, userobj = facenet_graph.GetResult()
     return output
 
+# Crop the face using opencv
+def crop_face(image_to_classify, file_name, minWidth, minHeight):
+    gray = cv2.cvtColor(image_to_classify, cv2.COLOR_BGR2GRAY)
+
+    # Detect faces in the image
+    faces = faceCascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=4,
+        minSize=(minWidth, minHeight)
+        #flags = cv2.CV_HAAR_SCALE_IMAGE
+    )
+    (height, width, channels) = image_to_classify.shape
+    if (len(faces) < 1):
+        print("Found no faces for {0}! W*H: {1}, {2}".format(file_name, width, height))
+        return image_to_classify
+    print("Found {0} faces for {1}! W*H: {2}, {3}".format(len(faces), file_name, width, height))
+    (x, y, w, h) = faces[0]
+    #print("Face at {0}, {1}, {2}, {3}".format(x,y,w,h))
+    return image_to_classify[y:y+h, x:x+w]
 
 # whiten an image
 def whiten_image(source_image):
@@ -111,11 +142,16 @@ def whiten_image(source_image):
 
 # create a preprocessed image from the source image that matches the
 # network expectations and return it
-def preprocess_image(src):
-    # scale the image
+def preprocess_image(src, file_name):
     NETWORK_WIDTH = 160
     NETWORK_HEIGHT = 160
-    preprocessed_image = cv2.resize(src, (NETWORK_WIDTH, NETWORK_HEIGHT))
+    # detect face
+    MIN_USE_WIDTH = 80
+    MIN_USE_HEIGHT = 80
+    img_src = crop_face(src, file_name,  MIN_USE_WIDTH, MIN_USE_HEIGHT) 
+
+    # scale the image
+    preprocessed_image = cv2.resize(img_src, (NETWORK_WIDTH, NETWORK_HEIGHT))
 
     #convert to RGB
     preprocessed_image = cv2.cvtColor(preprocessed_image, cv2.COLOR_BGR2RGB)
